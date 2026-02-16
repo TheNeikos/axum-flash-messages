@@ -18,7 +18,7 @@ async fn set_messages_handler(messages: Messages) -> impl IntoResponse {
 
 async fn read_messages_handler(messages: Messages) -> impl IntoResponse {
     let messages = messages
-        .into_iter()
+        .retrieve()
         .map(|message| format!("{}: {}", message.level, message))
         .collect::<Vec<_>>()
         .join(", ");

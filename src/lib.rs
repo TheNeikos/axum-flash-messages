@@ -24,7 +24,7 @@
 //!
 //! async fn read_messages_handler(messages: Messages) -> impl IntoResponse {
 //!     let messages = messages
-//!         .into_iter()
+//!         .retrieve()
 //!         .map(|message| format!("{}: {}", message.level, message))
 //!         .collect::<Vec<_>>()
 //!         .join(", ");
@@ -208,7 +208,6 @@ impl fmt::Display for Level {
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 struct Data {
-    pending_messages: MessageQueue,
     messages: MessageQueue,
 }
 
@@ -291,7 +290,7 @@ impl Messages {
     ) -> Self {
         {
             let mut data = self.data.lock();
-            data.pending_messages.push_back(Message {
+            data.messages.push_back(Message {
                 message: message.into(),
                 level,
                 metadata,
@@ -315,6 +314,15 @@ impl Messages {
         self.data.lock().messages.is_empty()
     }
 
+    /// Take and clear messages from the queue
+    ///
+    /// Only when messages are read are they actually cleared.
+    pub fn retrieve(self) -> impl Iterator<Item = Message> {
+        // Load messages by taking them from the pending queue.
+        let mut data = self.data.lock();
+        std::mem::take(&mut data.messages).into_iter()
+    }
+
     async fn save(self) -> Result<Self, session::Error> {
         self.session
             .insert(Self::DATA_KEY, self.data.clone())
@@ -322,30 +330,8 @@ impl Messages {
         Ok(self)
     }
 
-    fn load(self) -> Self {
-        {
-            // Load messages by taking them from the pending queue.
-            let mut data = self.data.lock();
-            data.messages = std::mem::take(&mut data.pending_messages);
-        }
-        self
-    }
-
     fn is_modified(&self) -> bool {
         self.is_modified.load(atomic::Ordering::Acquire)
-    }
-}
-
-impl Iterator for Messages {
-    type Item = Message;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let mut data = self.data.lock();
-        let message = data.messages.pop_front();
-        if message.is_some() && !self.is_modified() {
-            self.is_modified.store(true, atomic::Ordering::Release);
-        }
-        message
     }
 }
 
@@ -356,15 +342,10 @@ where
     type Rejection = (StatusCode, &'static str);
 
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
-        parts
-            .extensions
-            .get::<Messages>()
-            .cloned()
-            .ok_or((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Could not extract messages. Is `MessagesManagerLayer` installed?",
-            ))
-            .map(Messages::load)
+        parts.extensions.get::<Messages>().cloned().ok_or((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Could not extract messages. Is `MessagesManagerLayer` installed?",
+        ))
     }
 }
 
@@ -475,7 +456,7 @@ mod tests {
 
         async fn root(messages: Messages) -> impl IntoResponse {
             messages
-                .into_iter()
+                .retrieve()
                 .map(|message| format!("{}: {} {:?}", message.level, message, message.metadata))
                 .collect::<Vec<_>>()
                 .join(", ")
