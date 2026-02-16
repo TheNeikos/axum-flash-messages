@@ -297,9 +297,7 @@ impl Messages {
             });
         }
 
-        if !self.is_modified() {
-            self.is_modified.store(true, atomic::Ordering::Release);
-        }
+        self.is_modified.store(true, atomic::Ordering::Release);
 
         self
     }
@@ -320,6 +318,7 @@ impl Messages {
     pub fn retrieve(self) -> impl Iterator<Item = Message> {
         // Load messages by taking them from the pending queue.
         let mut data = self.data.lock();
+        self.is_modified.store(true, atomic::Ordering::Release);
         std::mem::take(&mut data.messages).into_iter()
     }
 
